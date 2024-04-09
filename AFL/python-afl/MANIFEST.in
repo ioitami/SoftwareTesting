@@ -1,0 +1,10 @@
+exclude *.c
+exclude README.rst
+include *.pyx
+include LICENSE
+include MANIFEST.in
+include doc/*
+include private/*
+include py-afl-*
+include pyproject.toml
+recursive-include tests *.py

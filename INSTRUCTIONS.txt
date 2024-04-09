@@ -1,0 +1,55 @@
+Within each program, open the html/pdf file and download any dependencies, following the commands listed 
+within the file. Make sure each file can be run without AFL.
+
+python-afl is within the AFL folder. Go to ./AFL and replace the afl-fuzz.c with the edited version. Then,
+>>> make all
+
+The compiled AFL should be the afl-fuzz file within ./AFL. If unsure, delete the current binary afl-fuzz in
+./AFL and run "make all" to see if afl-fuzz is being generated there.
+ 
+Next, go to the location where afl-fuzz is being called. In my case, it is within the default 
+ubuntu ./usr/local/bin.
+
+At ./usr/local/bin,
+>>> sudo cp /home/jowie/Documents/AFL/afl-fuzz ./
+(replace path with your own, check if afl-fuzz is within that location)
+
+AFL will now use that afl-fuzz binary.
+
+
+
+1. DjangoWebApplication
+
+Navigate to ./DjangoWebApplication
+
+CREATE A NEW FOLDER WITHIN ./DjangoWebApplication AND NAME IT "resultsDjango_[AFL_name]_[date]_[TestNum]".
+This will be the folder for AFL to spit the outputs in. (MUST be unique for each test run)
+
+Run the first command to start the server,
+
+>> python3 manage.py runserver
+
+open another terminal and run the second command to run the test driver.
+
+>> py-afl-fuzz -m 800 -o ./resultsDjango_[AFL_name]_[date]_[TestNum] -i ./init_inputs -- python3 Django_testdriver.py
+
+AFL should be running now.
+
+
+
+2. CoAP
+
+Navigate to ./CoAPthon3
+
+CREATE A NEW FOLDER WITHIN ./CoAPthon3 AND NAME IT "resultsCoAP_[AFL_name]_[date]_[TestNum]".
+This will be the folder for AFL to spit the outputs in. (MUST be unique for each test run)
+
+Run the first command to start the server,
+
+>> sudo gdb -ex run -ex backtrace --args python3 coapserver.py -i 127.0.0.1 -p 5683
+
+open another terminal and run the second command to run the test driver.
+
+>> py-afl-fuzz -m 800 -o ./resultsCoAP_[AFL_name]_[date]_[TestNum] -i ./init_inputs -- python3 CoAP_testdriver.py
+
+AFL should be running now.

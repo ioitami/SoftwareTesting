@@ -1,0 +1,41 @@
+[MASTER]
+extension-pkg-whitelist = afl
+load-plugins = pylint.extensions.check_elif
+
+[MESSAGES CONTROL]
+disable =
+    bad-continuation,
+    bad-option-value,
+    consider-using-f-string,
+    duplicate-code,
+    fixme,
+    invalid-name,
+    locally-disabled,
+    missing-docstring,
+    no-else-raise,
+    no-else-return,
+    raise-missing-from,
+    redefined-variable-type,
+    subprocess-popen-preexec-fn,
+    too-few-public-methods,
+    too-many-locals,
+    use-dict-literal,
+    useless-object-inheritance,
+
+[TYPECHECK]
+# FIXME: Pylint doesn't grok setuptools' distutils.
+ignored-modules =
+    distutils.command.sdist,
+    distutils.core,
+    distutils.version,
+
+[REPORTS]
+reports = no
+score = no
+msg-template = {path}:{line}: {C}: {symbol} [{obj}] {msg}
+
+[FORMAT]
+max-line-length = 120
+expected-line-ending-format = LF
+
+# vim:ft=dosini ts=4 sts=4 sw=4 et
