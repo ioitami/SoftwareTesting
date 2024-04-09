@@ -43,7 +43,6 @@
 #include "alloc-inl.h"
 #include "hash.h"
 #include "swarm.h"
-
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -67,6 +66,9 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/file.h>
+#include <pthread.h>
+
+
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
 #include <sys/sysctl.h>
@@ -90,34 +92,13 @@
 
 /* Our constants and var*/
 // Testing
+#define NUM_THREADS 5
 swarm **swarm_collection;
 swarm *best_swarm;
 int pilot_stage = 1;
 u64 time_limit;
-
-/*Declarations - A*/
-#define NUM_BUCKETS 5
-#define NUM_SLOTS 10
-#define MAX_PATHS 1000
-
-typedef struct {
-    u64 path;  // Assuming 64-bit chunks of the bitmap represent paths
-    int *path_count;
-    int **bucket_values;
-} PathInfo;
-
-typedef struct {
-    int min_hits;
-    int max_hits;
-} BucketSlot;
-
-typedef struct {
-    int bucketId;
-    BucketSlot *bucketslots;
-} Bucket;
-
-int bucket_store(PathInfo *path, Bucket *b);
-/*~*/
+// pthread_mutex_t mutex_lock = PTHREAD_MUTEX_INITIALIZER; 
+// pthread_cond_t mutex_cond = PTHREAD_COND_INITIALIZER; 
 
 /* Lots of globals, but mostly for the status UI and other things where it
    really makes no sense to haul them around as function parameters. */
@@ -940,182 +921,6 @@ EXP_ST void read_bitmap(u8 *fname)
   close(fd);
 }
 
-/*Function - A*/
-
-PathInfo * init_PathInfo(u64 path_val) {
-    PathInfo *path = (PathInfo *)malloc(sizeof(PathInfo));
-    path->path = path_val;
-    path->path_count = (int *)malloc(sizeof(int));
-    *(path->path_count) = 0;
-    path->bucket_values = (int **)malloc(sizeof(int *) * NUM_BUCKETS);
-    for (int i = 0; i < NUM_BUCKETS; i++) {
-        path->bucket_values[i] = (int *)malloc(sizeof(int) * NUM_SLOTS);
-        for (int j = 0; j < NUM_SLOTS; j++) {
-            path->bucket_values[i][j] = 0;
-        }
-    }
-    return path;
-}
-
-PathInfo ** init_pathArray(int *total_paths) {
-    PathInfo **pathArray = (PathInfo **)malloc(sizeof(PathInfo *) * MAX_PATHS);
-    *total_paths = 0;
-    return pathArray;
-}
-
-Bucket *initialise_bucketlist() {
-    Bucket *bucket_list = (Bucket *)malloc(sizeof(Bucket) * NUM_BUCKETS);
-    if (bucket_list == NULL) {
-        return NULL;
-    }
-
-    // Initialize buckets and their slots
-    // For Bucket 1
-    bucket_list[0].bucketId = 0;
-    bucket_list[0].bucketslots = (BucketSlot *)malloc(sizeof(BucketSlot) * NUM_SLOTS);
-    BucketSlot buckets1[NUM_SLOTS] = {
-        {0, 1}, {1, 2}, {2, 4},
-        {4, 8}, {8, 16}, {16, 32},
-        {32, 64}, {64, 128}, {128, 256},
-        {256, 512}
-    };
-    for (int i = 0; i < NUM_SLOTS; i++) {
-        bucket_list[0].bucketslots[i] = buckets1[i];
-    }
-
-    // Repeat for other buckets
-    // For Bucket 2
-    bucket_list[1].bucketId = 1;
-    bucket_list[1].bucketslots = (BucketSlot *)malloc(sizeof(BucketSlot) * NUM_SLOTS);
-    BucketSlot buckets2[NUM_SLOTS] = {
-        {0, 5}, {6, 10}, {11, 20},
-        {21, 30}, {31, 40}, {41, 50},
-        {51, 60}, {61, 70}, {71, 80},
-        {81, 90}
-    };
-    for (int i = 0; i < NUM_SLOTS; i++) {
-        bucket_list[1].bucketslots[i] = buckets2[i];
-    }
-
-    // For Bucket 3
-    bucket_list[2].bucketId = 2;
-    bucket_list[2].bucketslots = (BucketSlot *)malloc(sizeof(BucketSlot) * NUM_SLOTS);
-    BucketSlot buckets3[NUM_SLOTS] = {
-        {0, 100}, {101, 200}, {201, 300},
-        {301, 400}, {401, 500}, {501, 600},
-        {601, 700}, {701, 800}, {801, 900},
-        {901, 1000}
-    };
-    for (int i = 0; i < NUM_SLOTS; i++) {
-        bucket_list[2].bucketslots[i] = buckets3[i];
-    }
-
-    // For Bucket 4
-    bucket_list[3].bucketId = 3;
-    bucket_list[3].bucketslots = (BucketSlot *)malloc(sizeof(BucketSlot) * NUM_SLOTS);
-    BucketSlot buckets4[NUM_SLOTS] = {
-        {0, 10}, {11, 20}, {21, 30},
-        {31, 40}, {41, 50}, {51, 60},
-        {61, 70}, {71, 80}, {81, 90},
-        {91, 100}
-    };
-    for (int i = 0; i < NUM_SLOTS; i++) {
-        bucket_list[3].bucketslots[i] = buckets4[i];
-    }
-
-    // For Bucket 5
-    bucket_list[4].bucketId = 4;
-    bucket_list[4].bucketslots = (BucketSlot *)malloc(sizeof(BucketSlot) * NUM_SLOTS);
-    BucketSlot buckets5[NUM_SLOTS] = {
-        {0, 10}, {11, 30}, {31, 70},
-        {71, 150}, {151, 310}, {311, 600},
-        {601, 1200}, {1201, 2400}, {2401, 4800},
-        {4801, 9600}
-    };
-    for (int i = 0; i < NUM_SLOTS; i++) {
-        bucket_list[4].bucketslots[i] = buckets5[i];
-    }
-
-    return bucket_list;
-}
-
-void count_path(u64 path, PathInfo **pathArray, int *totalPaths) {
-    for (int i = 0; i < *totalPaths; i++) {
-        if (pathArray[i]->path == path) {
-            (*(pathArray[i]->path_count))++;
-            return;
-        }
-    }
-    if (*totalPaths < MAX_PATHS) {
-        pathArray[*totalPaths] = init_PathInfo(path);
-        (*(pathArray[*totalPaths]->path_count))++;
-        (*totalPaths)++;
-    } else {
-        fprintf(stderr, "Maximum number of paths reached\n");
-        exit(1);
-    }
-}
-
-PathInfo* find_path(u64 path, PathInfo** pathArray, int *total_paths) {
-    for (int i = 0; i < *total_paths; i++) {
-        if (pathArray[i]->path == path) {
-            return pathArray[i];
-        }
-    }
-    return NULL;
-}
-
-int bucket_check(int bucket_no, PathInfo *path, Bucket bucket) {
-    int c = 0;
-    for (int j = 0; j < NUM_SLOTS; j++) {
-        if (*(path->path_count) > bucket.bucketslots[j].min_hits && *(path->path_count) <= bucket.bucketslots[j].max_hits) {
-            if (path->bucket_values[bucket_no][j] == 0) {
-                path->bucket_values[bucket_no][j] = 1;
-                c++;
-            }
-        }
-    }
-    return c; // No bucket found
-}
-
-int bucket_store(PathInfo *path, Bucket *b) {
-    int score_count = 0;
-    for (int i = 0; i < NUM_BUCKETS; i++) {
-        int c = bucket_check(i, path, b[i]);
-        score_count += c;
-    }
-    return score_count;
-}
-
-
-void free_path(PathInfo *path) {
-    for (int i = 0; i < NUM_BUCKETS; i++) {
-        free(path->bucket_values[i]);
-    }
-    free(path->bucket_values);
-    free(path->path_count);
-    free(path);
-}
-
-void free_pathArray(PathInfo **pathArray, int *total_paths) {
-    for (int i = 0; i < *total_paths; i++) {
-        free_path(pathArray[i]);
-    }
-    free(pathArray);
-}
-
-void free_bucketlist(Bucket *bucket_list) {
-    if (bucket_list == NULL) {
-        return;
-    }
-
-    for (int i = 0; i < NUM_BUCKETS; i++) {
-        free(bucket_list[i].bucketslots);
-    }
-    free(bucket_list);
-}
-
-/*~*/
 /* Check if the current execution path brings anything new to the table.
    Update virgin bits to reflect the finds. Returns 1 if the only change is
    the hit-count for a particular tuple; 2 if there are new tuples seen.
@@ -1124,9 +929,7 @@ void free_bucketlist(Bucket *bucket_list) {
    This function is called after every exec() on a fairly large buffer, so
    it needs to be fast. We do this in 32-bit and 64-bit flavors. */
 
-
-/*A*/
-static inline u8 has_new_bits(u8 *virgin_map, PathInfo ** pathArray, int *totalPaths)
+static inline u8 has_new_bits(u8 *virgin_map)
 {
 
 #ifdef WORD_SIZE_64
@@ -1136,9 +939,6 @@ static inline u8 has_new_bits(u8 *virgin_map, PathInfo ** pathArray, int *totalP
 
   u32 i = (MAP_SIZE >> 3);
 
-/*A*/
-  count_path(*current, pathArray, totalPaths);
-/*~*/
 #else
 
   u32 *current = (u32 *)trace_bits;
@@ -2706,8 +2506,7 @@ static u8 run_target(char **argv, u32 timeout)
       RPFATAL(res, "Unable to request new process from fork server (OOM?)");
     }
 
-    if (child_pid <= 0)
-      FATAL("Fork server is misbehaving (OOM?)");
+    
   }
 
   /* Configure timeout, as requested by user, then wait for child to terminate. */
@@ -2882,9 +2681,9 @@ static void show_stats(void);
 /* Calibrate a new test case. This is done when processing the input directory
    to warn about flaky or otherwise problematic test cases early on; and when
    new paths are discovered to detect variable behavior and so on. */
-/*A*/
+
 static u8 calibrate_case(char **argv, struct queue_entry *q, u8 *use_mem,
-                         u32 handicap, u8 from_queue, PathInfo ** pathArray, int * totalPaths)
+                         u32 handicap, u8 from_queue)
 {
 
   static u8 first_trace[MAP_SIZE];
@@ -2921,9 +2720,7 @@ static u8 calibrate_case(char **argv, struct queue_entry *q, u8 *use_mem,
   {
 
     memcpy(first_trace, trace_bits, MAP_SIZE);
-  /*A*/
-    hnb = has_new_bits(virgin_bits, pathArray, totalPaths);
-  /*~*/
+    hnb = has_new_bits(virgin_bits);
     if (hnb > new_bits)
       new_bits = hnb;
   }
@@ -2958,9 +2755,8 @@ static u8 calibrate_case(char **argv, struct queue_entry *q, u8 *use_mem,
 
     if (q->exec_cksum != cksum)
     {
-    /*A*/
-      hnb = has_new_bits(virgin_bits, pathArray, totalPaths);
-    /*~*/
+
+      hnb = has_new_bits(virgin_bits);
       if (hnb > new_bits)
         new_bits = hnb;
 
@@ -3067,8 +2863,8 @@ static void check_map_coverage(void)
 
 /* Perform dry run of all test cases to confirm that the app is working as
    expected. This is done only for the initial inputs, and only once. */
-/*A*/
-static void perform_dry_run(char **argv, PathInfo **pathArray, int *totalPaths)
+
+static void perform_dry_run(char **argv)
 {
 
   struct queue_entry *q = queue;
@@ -3096,9 +2892,8 @@ static void perform_dry_run(char **argv, PathInfo **pathArray, int *totalPaths)
       FATAL("Short read from '%s'", q->fname);
 
     close(fd);
-  /*A*/
-    res = calibrate_case(argv, q, use_mem, 0, 1, pathArray, totalPaths);
-  /*~*/
+
+    res = calibrate_case(argv, q, use_mem, 0, 1);
     ck_free(use_mem);
 
     if (stop_soon)
@@ -3517,8 +3312,8 @@ static void write_crash_readme(void)
 /* Check if the result of an execve() during routine fuzzing is interesting,
    save or queue the input test case for further analysis if so. Returns 1 if
    entry is saved, 0 otherwise. */
-/*A*/
-static u8 save_if_interesting(char **argv, void *mem, u32 len, u8 fault, PathInfo **pathArray, int *totalPaths, Bucket *bucketList)
+
+static u8 save_if_interesting(char **argv, void *mem, u32 len, u8 fault)
 {
 
   u8 *fn = "";
@@ -3532,8 +3327,7 @@ static u8 save_if_interesting(char **argv, void *mem, u32 len, u8 fault, PathInf
     /* Keep only if there are new bits in the map, add to queue for
        future fuzzing, etc. */
 
-  /*A*/
-    if (!(hnb = has_new_bits(virgin_bits, pathArray, totalPaths)))
+    if (!(hnb = has_new_bits(virgin_bits)))
     {
       if (crash_mode)
         total_crashes++;
@@ -3557,13 +3351,6 @@ static u8 save_if_interesting(char **argv, void *mem, u32 len, u8 fault, PathInf
     {
       queue_top->has_new_cov = 1;
       queued_with_cov++;
-    } else {
-      u64 *current = (u64 *)trace_bits;
-      int hits = bucket_store(find_path(*current, pathArray, totalPaths), bucketList);
-      if (hits > 2) {
-        queue_top->has_new_cov = 1;
-        queued_with_cov++;
-      }
     }
 
     queue_top->exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
@@ -3571,9 +3358,8 @@ static u8 save_if_interesting(char **argv, void *mem, u32 len, u8 fault, PathInf
     /* Try to calibrate inline; this also calls update_bitmap_score() when
        successful. */
 
-  /*A*/
-    res = calibrate_case(argv, queue_top, mem, queue_cycle - 1, 0, pathArray, totalPaths);
-  /*~*/
+    res = calibrate_case(argv, queue_top, mem, queue_cycle - 1, 0);
+
     if (res == FAULT_ERROR)
       FATAL("Unable to execute target application");
 
@@ -3609,8 +3395,8 @@ static u8 save_if_interesting(char **argv, void *mem, u32 len, u8 fault, PathInf
 #else
       simplify_trace((u32 *)trace_bits);
 #endif /* ^WORD_SIZE_64 */
-    /*A*/
-      if (!has_new_bits(virgin_tmout, pathArray, totalPaths))
+
+      if (!has_new_bits(virgin_tmout))
         return keeping;
     }
 
@@ -3677,8 +3463,8 @@ static u8 save_if_interesting(char **argv, void *mem, u32 len, u8 fault, PathInf
 #else
       simplify_trace((u32 *)trace_bits);
 #endif /* ^WORD_SIZE_64 */
-    /*A*/
-      if (!has_new_bits(virgin_crash, pathArray, totalPaths))
+
+      if (!has_new_bits(virgin_crash))
         return keeping;
     }
 
@@ -5111,8 +4897,8 @@ abort_trimming:
 /* Write a modified test case, run program, process results. Handle
    error conditions, returning 1 if it's time to bail out. This is
    a helper function for fuzz_one(). */
-/*A*/
-EXP_ST u8 common_fuzz_stuff(char **argv, u8 *out_buf, u32 len, PathInfo **pathArray, int *totalPaths, Bucket *bucketList)
+
+EXP_ST u8 common_fuzz_stuff(char **argv, u8 *out_buf, u32 len)
 {
 
   u8 fault;
@@ -5156,9 +4942,9 @@ EXP_ST u8 common_fuzz_stuff(char **argv, u8 *out_buf, u32 len, PathInfo **pathAr
   }
 
   /* This handles FAULT_ERROR for us: */
-/*A*/
-  queued_discovered += save_if_interesting(argv, out_buf, len, fault, pathArray, totalPaths, bucketList);
-/*~*/
+
+  queued_discovered += save_if_interesting(argv, out_buf, len, fault);
+
   if (!(stage_cur % stats_update_freq) || stage_cur + 1 == stage_max)
     show_stats();
 
@@ -5522,8 +5308,8 @@ static u8 could_be_interest(u32 old_val, u32 new_val, u8 blen, u8 check_le)
 /* Take the current entry from the queue, fuzz it for a while. This
    function is a tad too long... returns 0 if fuzzed successfully, 1 if
    skipped or bailed out. */
-/*A*/
-static u8 fuzz_one(char **argv, PathInfo **pathArray, int *totalPaths, Bucket *bucketList)
+
+static u8 fuzz_one(char **argv)
 {
 
   s32 len, fd, temp_len, i, j;
@@ -5630,9 +5416,9 @@ static u8 fuzz_one(char **argv, PathInfo **pathArray, int *totalPaths, Bucket *b
          For more info: https://github.com/AFLplusplus/AFLplusplus/pull/425 */
 
       queue_cur->exec_cksum = 0;
-    /*A*/
-      res = calibrate_case(argv, queue_cur, in_buf, queue_cycle - 1, 0, pathArray, totalPaths);
-    /*~*/
+
+      res = calibrate_case(argv, queue_cur, in_buf, queue_cycle - 1, 0);
+
       if (res == FAULT_ERROR)
         FATAL("Unable to execute target application");
     }
@@ -5723,8 +5509,8 @@ static u8 fuzz_one(char **argv, PathInfo **pathArray, int *totalPaths, Bucket *b
     stage_cur_byte = stage_cur >> 3;
 
     FLIP_BIT(out_buf, stage_cur);
-  /*A*/
-    if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+    if (common_fuzz_stuff(argv, out_buf, len))
       goto abandon_entry;
 
     FLIP_BIT(out_buf, stage_cur);
@@ -5820,8 +5606,8 @@ static u8 fuzz_one(char **argv, PathInfo **pathArray, int *totalPaths, Bucket *b
 
     FLIP_BIT(out_buf, stage_cur);
     FLIP_BIT(out_buf, stage_cur + 1);
-  /*A*/
-    if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+    if (common_fuzz_stuff(argv, out_buf, len))
       goto abandon_entry;
 
     FLIP_BIT(out_buf, stage_cur);
@@ -5850,8 +5636,8 @@ static u8 fuzz_one(char **argv, PathInfo **pathArray, int *totalPaths, Bucket *b
     FLIP_BIT(out_buf, stage_cur + 1);
     FLIP_BIT(out_buf, stage_cur + 2);
     FLIP_BIT(out_buf, stage_cur + 3);
-  /*A*/
-    if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+    if (common_fuzz_stuff(argv, out_buf, len))
       goto abandon_entry;
 
     FLIP_BIT(out_buf, stage_cur);
@@ -5904,8 +5690,8 @@ static u8 fuzz_one(char **argv, PathInfo **pathArray, int *totalPaths, Bucket *b
     stage_cur_byte = stage_cur;
 
     out_buf[stage_cur] ^= 0xFF;
-  /*A*/
-    if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+    if (common_fuzz_stuff(argv, out_buf, len))
       goto abandon_entry;
 
     /* We also use this stage to pull off a simple trick: we identify
@@ -5987,8 +5773,8 @@ static u8 fuzz_one(char **argv, PathInfo **pathArray, int *totalPaths, Bucket *b
     stage_cur_byte = i;
 
     *(u16 *)(out_buf + i) ^= 0xFFFF;
-  /*A*/
-    if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+    if (common_fuzz_stuff(argv, out_buf, len))
       goto abandon_entry;
     stage_cur++;
 
@@ -6026,8 +5812,8 @@ static u8 fuzz_one(char **argv, PathInfo **pathArray, int *totalPaths, Bucket *b
     stage_cur_byte = i;
 
     *(u32 *)(out_buf + i) ^= 0xFFFFFFFF;
-  /*A*/
-    if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+    if (common_fuzz_stuff(argv, out_buf, len))
       goto abandon_entry;
     stage_cur++;
 
@@ -6087,8 +5873,8 @@ skip_bitflip:
 
         stage_cur_val = j;
         out_buf[i] = orig + j;
-      /*A*/
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6102,8 +5888,8 @@ skip_bitflip:
 
         stage_cur_val = -j;
         out_buf[i] = orig - j;
-      /*A*/
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6166,8 +5952,8 @@ skip_bitflip:
 
         stage_cur_val = j;
         *(u16 *)(out_buf + i) = orig + j;
-      /*A*/
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6179,8 +5965,8 @@ skip_bitflip:
 
         stage_cur_val = -j;
         *(u16 *)(out_buf + i) = orig - j;
-      /*A*/
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6196,8 +5982,8 @@ skip_bitflip:
 
         stage_cur_val = j;
         *(u16 *)(out_buf + i) = SWAP16(SWAP16(orig) + j);
-      /*A*/
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6209,8 +5995,8 @@ skip_bitflip:
 
         stage_cur_val = -j;
         *(u16 *)(out_buf + i) = SWAP16(SWAP16(orig) - j);
-      /*A*/
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6272,8 +6058,8 @@ skip_bitflip:
 
         stage_cur_val = j;
         *(u32 *)(out_buf + i) = orig + j;
-      /*A*/
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6285,8 +6071,8 @@ skip_bitflip:
 
         stage_cur_val = -j;
         *(u32 *)(out_buf + i) = orig - j;
-      /*A*/
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6302,8 +6088,8 @@ skip_bitflip:
 
         stage_cur_val = j;
         *(u32 *)(out_buf + i) = SWAP32(SWAP32(orig) + j);
-      /*A*/
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6315,8 +6101,8 @@ skip_bitflip:
 
         stage_cur_val = -j;
         *(u32 *)(out_buf + i) = SWAP32(SWAP32(orig) - j);
-      /*A*/
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6378,8 +6164,8 @@ skip_arith:
 
       stage_cur_val = interesting_8[j];
       out_buf[i] = interesting_8[j];
-    /*A*/
-      if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+      if (common_fuzz_stuff(argv, out_buf, len))
         goto abandon_entry;
 
       out_buf[i] = orig;
@@ -6435,8 +6221,8 @@ skip_arith:
         stage_val_type = STAGE_VAL_LE;
 
         *(u16 *)(out_buf + i) = interesting_16[j];
-      /*A*/
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6450,9 +6236,9 @@ skip_arith:
       {
 
         stage_val_type = STAGE_VAL_BE;
-      /*A*/
+
         *(u16 *)(out_buf + i) = SWAP16(interesting_16[j]);
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6513,7 +6299,7 @@ skip_arith:
 
         *(u32 *)(out_buf + i) = interesting_32[j];
 
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6529,7 +6315,7 @@ skip_arith:
         stage_val_type = STAGE_VAL_BE;
 
         *(u32 *)(out_buf + i) = SWAP32(interesting_32[j]);
-        if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+        if (common_fuzz_stuff(argv, out_buf, len))
           goto abandon_entry;
         stage_cur++;
       }
@@ -6598,7 +6384,7 @@ skip_interest:
       last_len = extras[j].len;
       memcpy(out_buf + i, extras[j].data, last_len);
 
-      if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+      if (common_fuzz_stuff(argv, out_buf, len))
         goto abandon_entry;
 
       stage_cur++;
@@ -6644,7 +6430,7 @@ skip_interest:
       /* Copy tail */
       memcpy(ex_tmp + i + extras[j].len, out_buf + i, len - i);
 
-      if (common_fuzz_stuff(argv, ex_tmp, len + extras[j].len, pathArray, totalPaths, bucketList))
+      if (common_fuzz_stuff(argv, ex_tmp, len + extras[j].len))
       {
         ck_free(ex_tmp);
         goto abandon_entry;
@@ -6702,7 +6488,7 @@ skip_user_extras:
       last_len = a_extras[j].len;
       memcpy(out_buf + i, a_extras[j].data, last_len);
 
-      if (common_fuzz_stuff(argv, out_buf, len, pathArray, totalPaths, bucketList))
+      if (common_fuzz_stuff(argv, out_buf, len))
         goto abandon_entry;
 
       stage_cur++;
@@ -7176,7 +6962,7 @@ havoc_stage:
       }
     }
 
-    if (common_fuzz_stuff(argv, out_buf, temp_len, pathArray, totalPaths, bucketList))
+    if (common_fuzz_stuff(argv, out_buf, temp_len))
       goto abandon_entry;
 
     /* out_buf might have been mangled a bit, so let's restore it to its
@@ -7352,7 +7138,7 @@ abandon_entry:
 
 /* Grab interesting test cases from other fuzzers. */
 
-static void sync_fuzzers(char **argv, PathInfo **pathArray, int *totalPaths, Bucket *bucketList)
+static void sync_fuzzers(char **argv)
 {
 
   DIR *sd;
@@ -7475,9 +7261,7 @@ static void sync_fuzzers(char **argv, PathInfo **pathArray, int *totalPaths, Buc
         syncing_party = sd_ent->d_name;
         // queued_imported += save_if_interesting(argv, mem, st.st_size, fault);
         //Testing
-      /*A*/
-        int i = save_if_interesting(argv, mem, st.st_size, fault, pathArray, totalPaths, bucketList);
-      /*~*/
+        int i = save_if_interesting(argv, mem, st.st_size, fault);
         queued_imported += i;
         if (pilot_stage && i) {
           best_swarm->score++;   
@@ -8496,7 +8280,43 @@ static void save_cmdline(u32 argc, char **argv)
 
 #ifndef AFL_LIB
 
+typedef struct {
+    int counter;
+    unsigned int skipped_fuzz;
+    char **use_argv;
+    int stop_soon;
+    u8 *sync_id;
+} thread_param;
+
+
+
+
+void *func1(void *arg) {
+    thread_param *tp = (thread_param *)arg;
+    int j;
+    for (j = 0; j < 10; j++) {
+        u8 current_swarm = (u8)(tp->counter / 10);
+        best_swarm = swarm_collection[current_swarm];
+        tp->skipped_fuzz = fuzz_one(tp->use_argv);
+    }
+    pthread_exit(NULL);
+}
+
+thread_param *create_new_thread_param(thread_param* tp,int counter, unsigned int skipped_fuzz, char **use_argv, int stop_fuzzing_soon,u8* sync_id ) {
+    
+    if (tp != NULL) {
+        tp->counter = counter;
+        tp->skipped_fuzz = skipped_fuzz;
+        tp->use_argv = use_argv;
+        tp->stop_soon = stop_fuzzing_soon;
+        tp->sync_id = sync_id;
+    }
+    return tp;
+}
+
 /* Main entry point */
+
+
 
 int main(int argc, char **argv)
 {
@@ -8508,259 +8328,254 @@ int main(int argc, char **argv)
   u8 mem_limit_given = 0;
   u8 exit_1 = !!getenv("AFL_BENCH_JUST_ONE");
   char **use_argv;
-
-  /*Variable Declarations - A*/
   
-  PathInfo **pathArray;
-  int totalPaths;
-  Bucket *bucketList = initialise_bucketlist();
+  int result;
+  pthread_t tid0, tid1, tid2, tid3, tid4;
+  pthread_t threads[NUM_THREADS] = {tid0, tid1, tid2, tid3, tid4};
 
-  pathArray = init_pathArray(&totalPaths);
-  
-  /*~*/
 
-  struct timeval tv;
-  struct timezone tz;
+   struct timeval tv;
+   struct timezone tz;
 
-  SAYF(cCYA "afl-fuzz " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
+   SAYF(cCYA "afl-fuzz " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
 
-  doc_path = access(DOC_PATH, F_OK) ? "docs" : DOC_PATH;
+   doc_path = access(DOC_PATH, F_OK) ? "docs" : DOC_PATH;
 
-  gettimeofday(&tv, &tz);
-  srandom(tv.tv_sec ^ tv.tv_usec ^ getpid());
+   gettimeofday(&tv, &tz);
+   srandom(tv.tv_sec ^ tv.tv_usec ^ getpid());
 
-  while ((opt = getopt(argc, argv, "+i:o:f:m:b:t:T:dnCB:S:M:x:QVL:")) > 0)
+   while ((opt = getopt(argc, argv, "+i:o:f:m:b:t:T:dnCB:S:M:x:QVL:")) > 0)
 
-    switch (opt)
-    {
+     switch (opt)
+     {
 
-    case 'i': /* input dir */
+     case 'i': /* input dir */
 
-      if (in_dir)
-        FATAL("Multiple -i options not supported");
-      in_dir = optarg;
+       if (in_dir)
+         FATAL("Multiple -i options not supported");
+       in_dir = optarg;
 
-      if (!strcmp(in_dir, "-"))
-        in_place_resume = 1;
+       if (!strcmp(in_dir, "-"))
+         in_place_resume = 1;
 
-      break;
+       break;
 
-    case 'o': /* output dir */
+     case 'o': /* output dir */
 
-      if (out_dir)
-        FATAL("Multiple -o options not supported");
-      out_dir = optarg;
-      break;
+       if (out_dir)
+         FATAL("Multiple -o options not supported");
+       out_dir = optarg;
+       break;
 
-    //testing
-    case 'L': /*Add time limit to terminate program*/
-      time_limit = atoi(optarg);
-      break;
+     // testing
+     case 'L': /*Add time limit to terminate program*/
+       time_limit = atoi(optarg);
+       break;
 
-    case 'M':
-    { /* master sync ID */
+     case 'M':
+     { /* master sync ID */
 
-      u8 *c;
+       u8 *c;
 
-      if (sync_id)
-        FATAL("Multiple -S or -M options not supported");
-      sync_id = ck_strdup(optarg);
+       if (sync_id)
+         FATAL("Multiple -S or -M options not supported");
+       sync_id = ck_strdup(optarg);
 
-      if ((c = strchr(sync_id, ':')))
-      {
+       if ((c = strchr(sync_id, ':')))
+       {
 
-        *c = 0;
+         *c = 0;
 
-        if (sscanf(c + 1, "%u/%u", &master_id, &master_max) != 2 ||
-            !master_id || !master_max || master_id > master_max ||
-            master_max > 1000000)
-          FATAL("Bogus master ID passed to -M");
-      }
+         if (sscanf(c + 1, "%u/%u", &master_id, &master_max) != 2 ||
+             !master_id || !master_max || master_id > master_max ||
+             master_max > 1000000)
+           FATAL("Bogus master ID passed to -M");
+       }
 
-      force_deterministic = 1;
-    }
+       force_deterministic = 1;
+     }
 
-    break;
+     break;
 
-    case 'S':
+     case 'S':
 
-      if (sync_id)
-        FATAL("Multiple -S or -M options not supported");
-      sync_id = ck_strdup(optarg);
-      break;
+       if (sync_id)
+         FATAL("Multiple -S or -M options not supported");
+       sync_id = ck_strdup(optarg);
+       break;
 
-    case 'f': /* target file */
+     case 'f': /* target file */
 
-      if (out_file)
-        FATAL("Multiple -f options not supported");
-      out_file = optarg;
-      break;
+       if (out_file)
+         FATAL("Multiple -f options not supported");
+       out_file = optarg;
+       break;
 
-    case 'x': /* dictionary */
+     case 'x': /* dictionary */
 
-      if (extras_dir)
-        FATAL("Multiple -x options not supported");
-      extras_dir = optarg;
-      break;
+       if (extras_dir)
+         FATAL("Multiple -x options not supported");
+       extras_dir = optarg;
+       break;
 
-    case 't':
-    { /* timeout */
+     case 't':
+     { /* timeout */
 
-      u8 suffix = 0;
+       u8 suffix = 0;
 
-      if (timeout_given)
-        FATAL("Multiple -t options not supported");
+       if (timeout_given)
+         FATAL("Multiple -t options not supported");
 
-      if (sscanf(optarg, "%u%c", &exec_tmout, &suffix) < 1 ||
-          optarg[0] == '-')
-        FATAL("Bad syntax used for -t");
+       if (sscanf(optarg, "%u%c", &exec_tmout, &suffix) < 1 ||
+           optarg[0] == '-')
+         FATAL("Bad syntax used for -t");
 
-      if (exec_tmout < 5)
-        FATAL("Dangerously low value of -t");
+       if (exec_tmout < 5)
+         FATAL("Dangerously low value of -t");
 
-      if (suffix == '+')
-        timeout_given = 2;
-      else
-        timeout_given = 1;
+       if (suffix == '+')
+         timeout_given = 2;
+       else
+         timeout_given = 1;
 
-      break;
-    }
+       break;
+     }
 
-    case 'm':
-    { /* mem limit */
+     case 'm':
+     { /* mem limit */
 
-      u8 suffix = 'M';
+       u8 suffix = 'M';
 
-      if (mem_limit_given)
-        FATAL("Multiple -m options not supported");
-      mem_limit_given = 1;
+       if (mem_limit_given)
+         FATAL("Multiple -m options not supported");
+       mem_limit_given = 1;
 
-      if (!strcmp(optarg, "none"))
-      {
+       if (!strcmp(optarg, "none"))
+       {
 
-        mem_limit = 0;
-        break;
-      }
+         mem_limit = 0;
+         break;
+       }
 
-      if (sscanf(optarg, "%llu%c", &mem_limit, &suffix) < 1 ||
-          optarg[0] == '-')
-        FATAL("Bad syntax used for -m");
+       if (sscanf(optarg, "%llu%c", &mem_limit, &suffix) < 1 ||
+           optarg[0] == '-')
+         FATAL("Bad syntax used for -m");
 
-      switch (suffix)
-      {
+       switch (suffix)
+       {
 
-      case 'T':
-        mem_limit *= 1024 * 1024;
-        break;
-      case 'G':
-        mem_limit *= 1024;
-        break;
-      case 'k':
-        mem_limit /= 1024;
-        break;
-      case 'M':
-        break;
+       case 'T':
+         mem_limit *= 1024 * 1024;
+         break;
+       case 'G':
+         mem_limit *= 1024;
+         break;
+       case 'k':
+         mem_limit /= 1024;
+         break;
+       case 'M':
+         break;
 
-      default:
-        FATAL("Unsupported suffix or bad syntax for -m");
-      }
+       default:
+         FATAL("Unsupported suffix or bad syntax for -m");
+       }
 
-      if (mem_limit < 5)
-        FATAL("Dangerously low value of -m");
+       if (mem_limit < 5)
+         FATAL("Dangerously low value of -m");
 
-      if (sizeof(rlim_t) == 4 && mem_limit > 2000)
-        FATAL("Value of -m out of range on 32-bit systems");
-    }
+       if (sizeof(rlim_t) == 4 && mem_limit > 2000)
+         FATAL("Value of -m out of range on 32-bit systems");
+     }
 
-    break;
+     break;
 
-    case 'b':
-    { /* bind CPU core */
+     case 'b':
+     { /* bind CPU core */
 
-      if (cpu_to_bind_given)
-        FATAL("Multiple -b options not supported");
-      cpu_to_bind_given = 1;
+       if (cpu_to_bind_given)
+         FATAL("Multiple -b options not supported");
+       cpu_to_bind_given = 1;
 
-      if (sscanf(optarg, "%u", &cpu_to_bind) < 1 ||
-          optarg[0] == '-')
-        FATAL("Bad syntax used for -b");
+       if (sscanf(optarg, "%u", &cpu_to_bind) < 1 ||
+           optarg[0] == '-')
+         FATAL("Bad syntax used for -b");
 
-      break;
-    }
+       break;
+     }
 
-    case 'd': /* skip deterministic */
+     case 'd': /* skip deterministic */
 
-      if (skip_deterministic)
-        FATAL("Multiple -d options not supported");
-      skip_deterministic = 1;
-      use_splicing = 1;
-      break;
+       if (skip_deterministic)
+         FATAL("Multiple -d options not supported");
+       skip_deterministic = 1;
+       use_splicing = 1;
+       break;
 
-    case 'B': /* load bitmap */
+     case 'B': /* load bitmap */
 
-      /* This is a secret undocumented option! It is useful if you find
-         an interesting test case during a normal fuzzing process, and want
-         to mutate it without rediscovering any of the test cases already
-         found during an earlier run.
+       /* This is a secret undocumented option! It is useful if you find
+          an interesting test case during a normal fuzzing process, and want
+          to mutate it without rediscovering any of the test cases already
+          found during an earlier run.
 
-         To use this mode, you need to point -B to the fuzz_bitmap produced
-         by an earlier run for the exact same binary... and that's it.
+          To use this mode, you need to point -B to the fuzz_bitmap produced
+          by an earlier run for the exact same binary... and that's it.
 
-         I only used this once or twice to get variants of a particular
-         file, so I'm not making this an official setting. */
+          I only used this once or twice to get variants of a particular
+          file, so I'm not making this an official setting. */
 
-      if (in_bitmap)
-        FATAL("Multiple -B options not supported");
+       if (in_bitmap)
+         FATAL("Multiple -B options not supported");
 
-      in_bitmap = optarg;
-      read_bitmap(in_bitmap);
-      break;
+       in_bitmap = optarg;
+       read_bitmap(in_bitmap);
+       break;
 
-    case 'C': /* crash mode */
+     case 'C': /* crash mode */
 
-      if (crash_mode)
-        FATAL("Multiple -C options not supported");
-      crash_mode = FAULT_CRASH;
-      break;
+       if (crash_mode)
+         FATAL("Multiple -C options not supported");
+       crash_mode = FAULT_CRASH;
+       break;
 
-    case 'n': /* dumb mode */
+     case 'n': /* dumb mode */
 
-      if (dumb_mode)
-        FATAL("Multiple -n options not supported");
-      if (getenv("AFL_DUMB_FORKSRV"))
-        dumb_mode = 2;
-      else
-        dumb_mode = 1;
+       if (dumb_mode)
+         FATAL("Multiple -n options not supported");
+       if (getenv("AFL_DUMB_FORKSRV"))
+         dumb_mode = 2;
+       else
+         dumb_mode = 1;
 
-      break;
+       break;
 
-    case 'T': /* banner */
+     case 'T': /* banner */
 
-      if (use_banner)
-        FATAL("Multiple -T options not supported");
-      use_banner = optarg;
-      break;
+       if (use_banner)
+         FATAL("Multiple -T options not supported");
+       use_banner = optarg;
+       break;
 
-    case 'Q': /* QEMU mode */
+     case 'Q': /* QEMU mode */
 
-      if (qemu_mode)
-        FATAL("Multiple -Q options not supported");
-      qemu_mode = 1;
+       if (qemu_mode)
+         FATAL("Multiple -Q options not supported");
+       qemu_mode = 1;
 
-      if (!mem_limit_given)
-        mem_limit = MEM_LIMIT_QEMU;
+       if (!mem_limit_given)
+         mem_limit = MEM_LIMIT_QEMU;
 
-      break;
+       break;
 
-    case 'V': /* Show version number */
+     case 'V': /* Show version number */
 
-      /* Version number has been printed already, just quit. */
-      exit(0);
+       /* Version number has been printed already, just quit. */
+       exit(0);
 
-    default:
+     default:
 
-      usage(argv[0]);
-    }
+       usage(argv[0]);
+     }
 
   if (optind == argc || !in_dir || !out_dir)
     usage(argv[0]);
@@ -8857,9 +8672,9 @@ int main(int argc, char **argv)
     use_argv = get_qemu_argv(argv[0], argv + optind, argc - optind);
   else
     use_argv = argv + optind;
-/*A*/
-  perform_dry_run(use_argv, pathArray, &totalPaths);
-/*~*/
+
+  perform_dry_run(use_argv);
+
   cull_queue();
 
   show_init_stats();
@@ -8934,7 +8749,7 @@ int main(int argc, char **argv)
       prev_queued = queued_paths;
 
       if (sync_id && queue_cycle == 1 && getenv("AFL_IMPORT_FIRST"))
-        sync_fuzzers(use_argv, pathArray, &totalPaths, bucketList);
+        sync_fuzzers(use_argv);
     }
 
     // skipped_fuzz = fuzz_one(use_argv);
@@ -8953,7 +8768,7 @@ int main(int argc, char **argv)
     // core fuzzing with best swarm identified above
     if (!pilot_stage && core_fuzz_counter < 100)
     {
-      skipped_fuzz = fuzz_one(use_argv, pathArray, &totalPaths, bucketList);
+      skipped_fuzz = fuzz_one(use_argv);
       core_fuzz_counter++;
     }
     else if (!pilot_stage) //Optimisation to update all swarm distributions AFTER core fuzzing
@@ -8967,11 +8782,23 @@ int main(int argc, char **argv)
     }
 
     if (pilot_stage) //Pilot fuzzing
-    {
-      u8 current_swarm = (u8)(pilot_fuzz_counter / 10);
-      best_swarm = swarm_collection[current_swarm];
-      skipped_fuzz = fuzz_one(use_argv, pathArray, &totalPaths, bucketList);
-      pilot_fuzz_counter++;
+      { 
+       int j;
+       int i;
+       thread_param *tp = (thread_param *)malloc(sizeof(thread_param));
+       for (j = 0; j < NUM_THREADS;j++){
+         
+         pthread_create(&threads[j], NULL, func1, create_new_thread_param(tp,j,skipped_fuzz,use_argv,stop_soon,sync_id));
+       }
+      for (i = 0; i < NUM_THREADS; i++) {
+        result=pthread_join(threads[i], NULL);
+        if (result) {
+            printf("Error: Unable to join thread %d, error code: %d\n", i,result);
+            exit(-1);
+        }
+    }
+
+      pilot_fuzz_counter = 100;
     }
 
     //Timeout
@@ -8981,13 +8808,7 @@ int main(int argc, char **argv)
     }
     // Testing
 
-    if (!stop_soon && sync_id && !skipped_fuzz)
-    {
-
-      if (!(sync_interval_cnt++ % SYNC_INTERVAL))
-        sync_fuzzers(use_argv, pathArray, &totalPaths, bucketList);
-    }
-
+    
     if (!stop_soon && exit_1)
       stop_soon = 2;
 
@@ -9049,9 +8870,6 @@ stop_fuzzing:
   // Testing
   free_swarm_collection(swarm_collection);
   // Testing
-/*A*/
-  free_pathArray(pathArray, &totalPaths);
-  free_bucketlist(bucketList);
   exit(0);
 }
 
