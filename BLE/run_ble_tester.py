@@ -9,6 +9,7 @@ import os
 import signal
 import subprocess
 import afl
+import random
 
 from binascii import hexlify
 
@@ -22,7 +23,7 @@ from bumble.transport import open_transport_or_link
 from bumble.utils import AsyncRunner
 from bumble.colors import color
 
-p = subprocess.Popen(["./zephyr.exe","--bt-dev=127.0.0.1:9000"])
+#p = subprocess.Popen(["GCOV_PREFIX=$(pwd) GCOV_PREFIX_STRIP=3 ./zephyr.exe","--bt-dev=127.0.0.1:9000"])
 
 async def write_target(target, attribute, bytes):
     # Write
@@ -99,14 +100,26 @@ class TargetEventsListener(Device.Listener):
         for attribute in attributes:
             
             #s = int(sys.stdin.read())
-            
-            await write_target(target, attribute, [0x01])
+            a = [2, 3, 5, 7]
+            byte_array = bytearray(a)
+            await write_target(target, attribute, [a])
             await read_target(target, attribute)
+        
+        # randint = random.randint(0,len(attributes)-1)
+        
+        # a = [2, 3, 5, 7]
+        # byte_array = bytearray(a)
+        # await write_target(target, attributes[randint], [0x01])
+        # await read_target(target, attributes[randint])
         
         print('---------------------------------------------------------------')
         print(color('[OK] Communication Finished', 'green'))
         print('---------------------------------------------------------------')
         #p.kill()
+        outputfile = 'lcov4.info'
+        p = subprocess.Popen(f"lcov --capture --directory ./ --output-file {outputfile} -q --rc lcov_branch_coverage=1", shell = True)
+        p
+        p.kill
         os._exit(0)
         # ---------------------------------------------------
         
@@ -166,6 +179,54 @@ async def main():
         await hci_source.wait_for_termination()
 
 
+def read_lines_from_file(filename):
+    """
+    Reads lines from the specified file and returns a generator.
+    """
+    with open(filename, "r") as file:
+        for line in file:
+            yield line.strip()
+
+def write_lines_to_file(filename, lines):
+    """
+    Appends lines to the specified file.
+    """
+    with open(filename, "a") as file:
+        for line in lines:
+            file.write( "\n"+line )
+    return lines[0]
+
+def remove_line_from_file(filename, line_to_remove):
+    """
+    Removes the first occurrence of a specific line from the specified file.
+    """
+    with open(filename, "r") as file:
+        lines = file.readlines()
+
+    with open(filename, "w") as file:
+        removed = False
+        for line in lines:
+            if not removed and line.strip() == line_to_remove:
+                removed = True
+                continue  # Skip writing the line to remove
+            file.write(line)
+
+
+#HOW THE CODE SHOULD BE RUN
+# def main():
+#     filename = "filename.txt"  # Predefined filename
+#     line_reader = read_lines_from_file(filename)
+#     while True:
+#         input_line = next(line_reader)
+#         print(input_line)
+#         mod_input="Test2ed"
+#         remove_line_from_file(filename, input_line)  # Remove from file
+        
+#         write_lines_to_file(filename, [mod_input])  # Write to the same file
+#         break
+
+
+
 # -----------------------------------------------------------------------------
     
 #logging.basicConfig(level=os.environ.get('BUMBLE_LOGLEVEL', 'INFO').upper())
@@ -183,6 +244,5 @@ if __name__ == '__main__':
     
     # logging.basicConfig(level=os.environ.get('BUMBLE_LOGLEVEL', 'INFO').upper())
     asyncio.run(main())
-    p.kill()
+    #p.kill()
     os._exit(0)
-
