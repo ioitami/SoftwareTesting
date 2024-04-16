@@ -10,6 +10,9 @@ import signal
 import subprocess
 import afl
 import random
+import uuid
+import shutil
+import time
 
 from binascii import hexlify
 
@@ -23,7 +26,7 @@ from bumble.transport import open_transport_or_link
 from bumble.utils import AsyncRunner
 from bumble.colors import color
 
-#p = subprocess.Popen(["GCOV_PREFIX=$(pwd) GCOV_PREFIX_STRIP=3 ./zephyr.exe","--bt-dev=127.0.0.1:9000"])
+p2 = subprocess.Popen("GCOV_PREFIX=$(pwd) GCOV_PREFIX_STRIP=3 ./zephyr.exe --bt-dev=127.0.0.1:9000", shell=True)
 
 async def write_target(target, attribute, bytes):
     # Write
@@ -96,13 +99,24 @@ class TargetEventsListener(Device.Listener):
         
         # -------- Main interaction with the target here --------
     
+        filename = ",/test_input.txt"  # Predefined filename
+        line_reader = read_lines_from_file(filename)
+        inputNum = 1 # ARRAY LOCATION HERE
+                
+        # line_reader = ["2","5"] # TEST INPUT
+        
+        int_line_reader = [int(numeric_string) for numeric_string in line_reader]
+        
+        
+        input = int(int_line_reader[inputNum])
+        byte_array = bytearray(input)
+
         print('=== Read/Write Attributes (Handles)')
         for attribute in attributes:
-            
-            #s = int(sys.stdin.read())
-            a = [2, 3, 5, 7]
-            byte_array = bytearray(a)
-            await write_target(target, attribute, [a])
+
+            # a = [2, 3, 5, 7]
+
+            await write_target(target, attribute, [input])
             await read_target(target, attribute)
         
         # randint = random.randint(0,len(attributes)-1)
@@ -115,11 +129,26 @@ class TargetEventsListener(Device.Listener):
         print('---------------------------------------------------------------')
         print(color('[OK] Communication Finished', 'green'))
         print('---------------------------------------------------------------')
-        #p.kill()
-        outputfile = 'lcov4.info'
+        
+        p2.kill
+        
+        outputfile = 'lcov.info'
         p = subprocess.Popen(f"lcov --capture --directory ./ --output-file {outputfile} -q --rc lcov_branch_coverage=1", shell = True)
         p
         p.kill
+        
+        # wait for 6 seconds for program to finish writing lcov
+        time.sleep(6)
+        
+        # RUN IF INTERESTING CODE HERE
+        
+        # IF INTERESTING:
+        unique_filename = str(uuid.uuid4()) #Creates a unique file name
+        shutil.copy(f"./lcov.info", f"./IsInterestingLcovs/{unique_filename}.info")
+        print("estts")
+        
+        # IF NOT INTERESTING, DO NOTHING
+        
         os._exit(0)
         # ---------------------------------------------------
         
@@ -160,7 +189,7 @@ async def main():
         await device.power_on()
         await device.start_scanning() # this calls "on_advertisement"
 
-        #p
+        p2
         
         print('Waiting Advertisment from BLE Target')
         while device.listener.got_advertisement is False:
@@ -233,9 +262,6 @@ def remove_line_from_file(filename, line_to_remove):
 #asyncio.run(main(a))
 
 if __name__ == '__main__':
-    signal.signal(signal.SIGCHLD, signal.SIG_IGN)  # this should have no effect on the forkserver
-    afl.init()
-    
     
     asyncio.run(main())
     #p.kill()
