@@ -236,13 +236,7 @@ if __name__ == '__main__':
     signal.signal(signal.SIGCHLD, signal.SIG_IGN)  # this should have no effect on the forkserver
     afl.init()
     
-    # try:
-    #     a = sys.stdin.read()
-    #     a.encode('ASCII')
-    # except ValueError:
-    #     pass
     
-    # logging.basicConfig(level=os.environ.get('BUMBLE_LOGLEVEL', 'INFO').upper())
     asyncio.run(main())
     #p.kill()
     os._exit(0)

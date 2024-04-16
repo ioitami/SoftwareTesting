@@ -1,1 +1,1 @@
-PUT,test,application/json
+PUT,application/xml,application/json

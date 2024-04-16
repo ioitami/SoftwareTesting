@@ -1,1 +1,1 @@
-GET,rd-lookup/ep?et=oic.d.sensor,text/plain
+GET,application/xml,text/plain

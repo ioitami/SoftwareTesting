@@ -102,7 +102,7 @@ def main(afl_input):
     port = 5683
     
     op = afl_input[0]
-    path = afl_input[1]
+    path = "coap://127.0.0.1:5683/" + afl_input[1]
     payload = afl_input[2]
 
     fuzzer = CoAPFuzzer(host, port)
